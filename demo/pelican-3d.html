@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>鹈鹕 · Three.js 3D 场景</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1620; }
+  body {
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { position: fixed; inset: 0; }
+  #app canvas { display: block; width: 100%; height: 100%; }
+
+  .vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 1;
+    background: radial-gradient(ellipse at 50% 42%, rgba(0, 0, 0, 0) 50%, rgba(12, 18, 24, .3) 100%);
+  }
+
+  .hud { position: fixed; z-index: 2; pointer-events: none; color: rgba(255, 251, 242, .92); }
+  .title { top: clamp(18px, 3.4vw, 38px); left: clamp(18px, 3.4vw, 42px); }
+  .title h1 {
+    margin: 0; font-size: clamp(17px, 1.9vw, 23px); font-weight: 600;
+    letter-spacing: .34em; text-indent: .34em; text-shadow: 0 1px 18px rgba(16, 24, 30, .45);
+  }
+  .title p {
+    margin: 9px 0 0; font-size: 10px; font-weight: 500;
+    letter-spacing: .3em; text-transform: uppercase; opacity: .62;
+  }
+  .hint {
+    left: 50%; bottom: clamp(18px, 3.4vh, 32px); transform: translateX(-50%);
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 9px 16px 9px 14px; border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, .24);
+    background: rgba(18, 28, 34, .3); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    font-size: 12px; letter-spacing: .1em; white-space: nowrap;
+    opacity: 0; animation: hint-in .7s ease 1s forwards, hint-out .9s ease 10s forwards;
+  }
+  .hint svg { width: 15px; height: 15px; opacity: .82; }
+  @keyframes hint-in { to { opacity: .86; } }
+  @keyframes hint-out { to { opacity: 0; } }
+
+  .loading {
+    position: fixed; inset: 0; z-index: 5; display: grid; place-items: center;
+    background: linear-gradient(180deg, #101b24 0%, #26363c 100%);
+    transition: opacity .7s ease;
+  }
+  .loading.hidden { opacity: 0; pointer-events: none; }
+  .loading span { color: rgba(255, 248, 236, .62); font-size: 11px; letter-spacing: .46em; text-indent: .46em; }
+
+  .fallback {
+    position: fixed; inset: 0; z-index: 6; display: none; place-items: center; padding: 28px;
+    background: #132028;
+  }
+  .fallback[data-show="true"] { display: grid; }
+  .fallback div { max-width: 440px; color: #e9e2d4; text-align: center; font-size: 14px; line-height: 1.75; }
+  .fallback strong { display: block; margin-bottom: 9px; font-size: 16px; letter-spacing: .05em; }
+  .fallback p { margin: 0; opacity: .78; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hint { animation: none; opacity: .86; }
+  }
+</style>
+</head>
+<body>
+  <div id="app" role="img" aria-label="一只站在礁石上的鹈鹕，背景是海边的沙地和天空"></div>
+  <div class="vignette"></div>
+
+  <div class="hud title">
+    <h1>鹈鹕</h1>
+    <p>Pelican · Three.js</p>
+  </div>
+
+  <div class="hud hint" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="7" y="2.5" width="10" height="17" rx="5"></rect>
+      <path d="M12 6.5v4"></path>
+    </svg>
+    <span>拖动旋转 · 滚轮缩放</span>
+  </div>
+
+  <div class="loading" id="loading"><span>L O A D I N G</span></div>
+
+  <div class="fallback" id="fallback">
+    <div>
+      <strong>场景没能加载</strong>
+      <p id="fallback-message">请确认网络可以访问 CDN，然后刷新页面。</p>
+    </div>
+  </div>
+
+  <script>
+    // 页面依赖 CDN 上的 Three.js；加载失败或初始化超时时给出可读的提示。
+    (function () {
+      var fallback = document.getElementById('fallback');
+      var message = document.getElementById('fallback-message');
+      window.__pelicanFail = function (text) {
+        if (text) message.textContent = text;
+        fallback.dataset.show = 'true';
+      };
+      window.addEventListener('error', function (event) {
+        if (!window.__pelicanReady) {
+          console.error(event.error || event.message || event);
+          window.__pelicanFail('场景初始化失败，请换用支持 WebGL 的现代浏览器后刷新重试。');
+        }
+      }, true);
+      window.setTimeout(function () {
+        if (!window.__pelicanReady) {
+          window.__pelicanFail('Three.js 加载超时。请检查网络连接（需要访问 cdn.jsdelivr.net）后刷新页面。');
+        }
+      }, 12000);
+    })();
+  </script>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const params = new URLSearchParams(window.location.search);
+    const reeds = [];
+    const motes = { points: null, seeds: [] };
+
+    try {
+      init();
+    } catch (error) {
+      console.error(error);
+      window.__pelicanFail('场景初始化失败，请换用支持 WebGL 的现代浏览器后刷新重试。');
+    }
+
+    function init() {
+      /* ---------------------------------------------------------------- *
+       *  Renderer / scene / camera
+       * ---------------------------------------------------------------- */
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      } catch (error) {
+        window.__pelicanFail('当前浏览器无法创建 WebGL 上下文，请换用支持 WebGL 的浏览器。');
+        throw error;
+      }
+
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.getElementById('app').appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xa9c8d8);
+      scene.fog = new THREE.Fog(0xe4d2b2, 18, 65);
+
+      const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
+      camera.position.set(2.6, 1.85, 3.7);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, 1.22, 0.15);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.06;
+      controls.enablePan = false;
+      controls.minDistance = 2.3;
+      controls.maxDistance = 8.4;
+      controls.minPolarAngle = 0.32;
+      controls.maxPolarAngle = Math.PI / 2 - 0.04;
+      controls.rotateSpeed = 0.85;
+      controls.zoomSpeed = 0.9;
+      controls.autoRotate = !prefersReducedMotion && !params.has('still');
+      controls.autoRotateSpeed = 0.55;
+      controls.update();
+
+      const stopAutoRotate = () => { controls.autoRotate = false; };
+      renderer.domElement.addEventListener('pointerdown', stopAutoRotate, { once: true });
+      renderer.domElement.addEventListener('wheel', stopAutoRotate, { once: true, passive: true });
+
+      /* ---------------------------------------------------------------- *
+       *  Sky, environment and lights
+       * ---------------------------------------------------------------- */
+      const sky = new THREE.Mesh(
+        new THREE.SphereGeometry(80, 48, 24),
+        new THREE.ShaderMaterial({
+          side: THREE.BackSide,
+          depthWrite: false,
+          fog: false,
+          uniforms: {
+            topColor: { value: new THREE.Color(0x5387b4) },
+            midColor: { value: new THREE.Color(0xaed1df) },
+            horizonColor: { value: new THREE.Color(0xf4ddb4) },
+            glowColor: { value: new THREE.Color(0xffe6bd) },
+            glowDirection: { value: new THREE.Vector3(-0.5, 0.3, -0.82).normalize() }
+          },
+          vertexShader: /* glsl */`
+            varying vec3 vDirection;
+            void main() {
+              vDirection = normalize(position);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: /* glsl */`
+            uniform vec3 topColor;
+            uniform vec3 midColor;
+            uniform vec3 horizonColor;
+            uniform vec3 glowColor;
+            uniform vec3 glowDirection;
+            varying vec3 vDirection;
+
+            void main() {
+              float h = clamp(vDirection.y, 0.0, 1.0);
+              vec3 color = mix(horizonColor, midColor, smoothstep(0.0, 0.2, h));
+              color = mix(color, topColor, smoothstep(0.2, 0.78, h));
+
+              // 低空的一层暖光，让天空和沙地之间的过渡更柔和。
+              float glow = pow(max(dot(vDirection, normalize(glowDirection)), 0.0), 5.0);
+              color = mix(color, glowColor, glow * 0.14 * (1.0 - smoothstep(0.1, 0.55, h)));
+
+              gl_FragColor = vec4(color, 1.0);
+              #include <tonemapping_fragment>
+              #include <colorspace_fragment>
+            }
+          `
+        })
+      );
+      sky.frustumCulled = false;
+      scene.add(sky);
+
+      // 用一张程序生成的等距柱状图给 PBR 材质提供柔和的环境反射。
+      try {
+        scene.environment = createEnvironment(renderer);
+        scene.environmentIntensity = 0.38;
+      } catch (error) {
+        console.warn('Environment map unavailable, falling back to lights only.', error);
+      }
+
+      const hemisphere = new THREE.HemisphereLight(0xd7e9f8, 0xbc9f6f, 0.36);
+      scene.add(hemisphere);
+
+      const keyLight = new THREE.DirectionalLight(0xffddb0, 3.0);
+      keyLight.position.set(4.6, 6.8, 5.2);
+      keyLight.target.position.set(0, 1.1, 0);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(2048, 2048);
+      keyLight.shadow.camera.near = 1;
+      keyLight.shadow.camera.far = 24;
+      keyLight.shadow.camera.left = -5.5;
+      keyLight.shadow.camera.right = 5.5;
+      keyLight.shadow.camera.top = 5.5;
+      keyLight.shadow.camera.bottom = -5.5;
+      keyLight.shadow.bias = -0.00035;
+      keyLight.shadow.normalBias = 0.024;
+      keyLight.shadow.radius = 2.5;
+      keyLight.shadow.camera.updateProjectionMatrix();
+      scene.add(keyLight, keyLight.target);
+
+      const rimLight = new THREE.DirectionalLight(0xffcda0, 0.9);
+      rimLight.position.set(-5.5, 4.2, -6);
+      scene.add(rimLight);
+
+      const bounceLight = new THREE.DirectionalLight(0xffd9a6, 0.26);
+      bounceLight.position.set(-1, -1.5, 6);
+      scene.add(bounceLight);
+
+      /* ---------------------------------------------------------------- *
+       *  Ground, rocks and vegetation
+       * ---------------------------------------------------------------- */
+      const sandTexture = createSandTexture(renderer);
+      const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(60, 128),
+        new THREE.MeshStandardMaterial({
+          color: 0xd9c298,
+          map: sandTexture,
+          roughness: 1,
+          metalness: 0
+        })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // 后方是一片安静的海面，水面把天空的颜色带到地平线上。
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(180, 95),
+        new THREE.MeshStandardMaterial({
+          color: 0x5f93a8,
+          roughness: 0.18,
+          metalness: 0.08
+        })
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(0, 0.006, -60.5);
+      scene.add(water);
+
+      // 石头下面的接触阴影，补足方向光阴影之外的重量感。
+      const contactShadow = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.7, 3.7),
+        new THREE.MeshBasicMaterial({
+          map: createContactTexture(),
+          transparent: true,
+          depthWrite: false,
+          opacity: 0.32
+        })
+      );
+      contactShadow.rotation.x = -Math.PI / 2;
+      contactShadow.position.set(0, 0.006, 0.15);
+      scene.add(contactShadow);
+
+      const rockMaterial = new THREE.MeshStandardMaterial({
+        color: 0x7d7364,
+        roughness: 0.94,
+        metalness: 0.02,
+        flatShading: true
+      });
+      const rock = createRock(1.02, 0.24, rockMaterial);
+      rock.position.y = 0.12;
+      rock.rotation.y = 0.35;
+      scene.add(rock);
+
+      addRock(scene, -2.45, -2.15, 0.62, 0.4, 1.9);
+      addRock(scene, 2.35, -1.55, 0.46, 0.28, 0.8);
+      addRock(scene, 2.05, 0.6, 0.24, 0.16, 2.6);
+      addRock(scene, -1.95, 0.55, 0.3, 0.2, 4.4);
+
+      const pebbleMaterial = new THREE.MeshStandardMaterial({ color: 0x9a8e79, roughness: 0.96, flatShading: true });
+      for (let i = 0; i < 9; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = 2.05 + Math.random() * 2.4;
+        const size = 0.06 + Math.random() * 0.11;
+        const pebble = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), pebbleMaterial);
+        pebble.position.set(Math.cos(angle) * distance, size * 0.55, Math.sin(angle) * distance);
+        pebble.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+        pebble.castShadow = true;
+        pebble.receiveShadow = true;
+        scene.add(pebble);
+      }
+
+      addReedClump(scene, -2.7, -1.6, 12, 1.1);
+      addReedClump(scene, -2.0, -2.5, 9, 0.95);
+      addReedClump(scene, 2.8, -2.2, 10, 1.05);
+
+      /* ---------------------------------------------------------------- *
+       *  Pelican
+       * ---------------------------------------------------------------- */
+      const pelican = createPelican();
+      pelican.position.y = 0.235;
+      pelican.rotation.y = -0.16;
+      scene.add(pelican);
+
+      /* ---------------------------------------------------------------- *
+       *  Dust motes
+       * ---------------------------------------------------------------- */
+      motes.points = createMotes();
+      scene.add(motes.points);
+
+      /* ---------------------------------------------------------------- *
+       *  Resize, render loop and small public API
+       * ---------------------------------------------------------------- */
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      const clock = new THREE.Clock();
+      let firstFrame = true;
+
+      renderer.setAnimationLoop(() => {
+        const time = clock.getElapsedTime();
+
+        if (!prefersReducedMotion) {
+          // 轻微的呼吸与头部摆动，避免画面完全静止。
+          const breath = 1 + Math.sin(time * 1.1) * 0.0035;
+          pelican.scale.set(breath, 1 / breath, breath);
+          pelican.userData.head.rotation.x = Math.sin(time * 0.62 + 0.8) * 0.022;
+          pelican.userData.head.rotation.z = Math.sin(time * 0.48) * 0.018;
+
+          for (const reed of reeds) {
+            const { baseX, baseZ, phase, speed } = reed.userData;
+            reed.rotation.x = baseX + Math.cos(time * speed + phase) * 0.018;
+            reed.rotation.z = baseZ + Math.sin(time * speed + phase) * 0.032;
+          }
+
+          updateMotes(time);
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+
+        if (firstFrame) {
+          firstFrame = false;
+          window.__pelicanReady = true;
+          document.getElementById('loading').classList.add('hidden');
+          // 如果 CDN 加载慢到触发过超时提示，场景就绪后把提示收起来。
+          document.getElementById('fallback').dataset.show = 'false';
+        }
+      });
+
+      window.pelicanDemo = { THREE, scene, camera, controls, renderer, pelican };
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  Scene helpers
+     * ------------------------------------------------------------------ */
+
+    function createEnvironment(renderer) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+
+      const sky = ctx.createLinearGradient(0, 0, 0, 512);
+      sky.addColorStop(0, '#6e9fc8');
+      sky.addColorStop(0.42, '#cfe4ec');
+      sky.addColorStop(0.56, '#f4e6ca');
+      sky.addColorStop(0.62, '#cdbfa2');
+      sky.addColorStop(1, '#8a7c63');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, 1024, 512);
+
+      const glow = ctx.createRadialGradient(310, 230, 0, 310, 230, 230);
+      glow.addColorStop(0, 'rgba(255, 241, 207, 0.95)');
+      glow.addColorStop(0.24, 'rgba(255, 228, 180, 0.55)');
+      glow.addColorStop(1, 'rgba(255, 228, 180, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, 1024, 512);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.colorSpace = THREE.SRGBColorSpace;
+
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const environment = pmrem.fromEquirectangular(texture).texture;
+      texture.dispose();
+      pmrem.dispose();
+      return environment;
+    }
+
+    function createSandTexture(renderer) {
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#d9c59f';
+      ctx.fillRect(0, 0, size, size);
+
+      for (let i = 0; i < 48; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const radius = 20 + Math.random() * 80;
+        const patch = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        const warm = Math.random() > 0.5;
+        patch.addColorStop(0, warm ? 'rgba(229, 208, 168, 0.16)' : 'rgba(142, 119, 86, 0.13)');
+        patch.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = patch;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let i = 0; i < 11000; i++) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const radius = Math.random() * 1.5 + 0.25;
+        const light = Math.random() > 0.48;
+        const alpha = light ? 0.05 + Math.random() * 0.13 : 0.035 + Math.random() * 0.1;
+        ctx.fillStyle = light ? `rgba(255, 246, 219, ${alpha})` : `rgba(112, 92, 63, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(24, 24);
+      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    function createRock(radius, height, material) {
+      const geometry = new THREE.CylinderGeometry(radius * 0.82, radius, height, 24, 2);
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i++) {
+        const x = position.getX(i);
+        const y = position.getY(i);
+        const z = position.getZ(i);
+        const angle = Math.atan2(z, x);
+        const jitter = 1 + Math.sin(angle * 3 + 1.7) * 0.035 + Math.sin(angle * 7 + 0.4) * 0.018;
+        position.setX(i, x * jitter);
+        position.setZ(i, z * jitter);
+        if (y < 0) position.setY(i, y + Math.sin(angle * 5) * 0.012);
+      }
+      geometry.computeVertexNormals();
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function addRock(scene, x, z, radius, height, rotation) {
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x8b8171,
+        roughness: 0.95,
+        flatShading: true
+      });
+      const mesh = createRock(radius, height, material);
+      mesh.position.set(x, height / 2, z);
+      mesh.rotation.y = rotation;
+      scene.add(mesh);
+    }
+
+    function addReedClump(scene, x, z, count, scale) {
+      const clump = new THREE.Group();
+      clump.position.set(x, 0, z);
+
+      const green = new THREE.MeshStandardMaterial({ color: 0x6f7f46, roughness: 0.92 });
+      const olive = new THREE.MeshStandardMaterial({ color: 0x8d8449, roughness: 0.94 });
+      const headMaterial = new THREE.MeshStandardMaterial({ color: 0x8c6b3f, roughness: 0.88 });
+
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Math.random() * 0.32 * scale;
+        const height = (0.55 + Math.random() * 0.7) * scale;
+        const blade = new THREE.Group();
+        blade.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+
+        const geometry = new THREE.CylinderGeometry(0.004, 0.019 * scale, height, 5);
+        geometry.translate(0, height / 2, 0);
+        const mesh = new THREE.Mesh(geometry, i % 2 ? olive : green);
+        mesh.castShadow = true;
+        blade.add(mesh);
+
+        if (Math.random() < 0.6) {
+          const head = new THREE.Mesh(new THREE.CapsuleGeometry(0.023, 0.07, 4, 8), headMaterial);
+          head.position.y = height + 0.02;
+          head.castShadow = true;
+          blade.add(head);
+        }
+
+        const baseX = (Math.random() - 0.5) * 0.24;
+        const baseZ = (Math.random() - 0.5) * 0.24;
+        blade.rotation.set(baseX, 0, baseZ);
+        blade.userData = {
+          baseX,
+          baseZ,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.6 + Math.random() * 0.5
+        };
+        clump.add(blade);
+        reeds.push(blade);
+      }
+
+      scene.add(clump);
+    }
+
+    function taperedTube(curve, radiusAt, tubularSegments = 64, radialSegments = 20) {
+      const frames = curve.computeFrenetFrames(tubularSegments, false);
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const indices = [];
+      const point = new THREE.Vector3();
+      const normal = new THREE.Vector3();
+
+      for (let i = 0; i <= tubularSegments; i++) {
+        const t = i / tubularSegments;
+        curve.getPointAt(t, point);
+        const radius = radiusAt(t);
+        const frameNormal = frames.normals[i];
+        const frameBinormal = frames.binormals[i];
+
+        for (let j = 0; j <= radialSegments; j++) {
+          const v = (j / radialSegments) * Math.PI * 2;
+          const sin = Math.sin(v);
+          const cos = -Math.cos(v);
+          normal
+            .set(
+              cos * frameNormal.x + sin * frameBinormal.x,
+              cos * frameNormal.y + sin * frameBinormal.y,
+              cos * frameNormal.z + sin * frameBinormal.z
+            )
+            .normalize();
+
+          positions.push(
+            point.x + radius * normal.x,
+            point.y + radius * normal.y,
+            point.z + radius * normal.z
+          );
+          normals.push(normal.x, normal.y, normal.z);
+          uvs.push(t, j / radialSegments);
+        }
+      }
+
+      for (let i = 1; i <= tubularSegments; i++) {
+        for (let j = 1; j <= radialSegments; j++) {
+          const a = (radialSegments + 1) * (i - 1) + (j - 1);
+          const b = (radialSegments + 1) * i + (j - 1);
+          const c = (radialSegments + 1) * i + j;
+          const d = (radialSegments + 1) * (i - 1) + j;
+          indices.push(a, b, d, b, c, d);
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setIndex(indices);
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      return geometry;
+    }
+
+    function createPouchGeometry() {
+      const lengthSegments = 40;
+      const radialSegments = 20;
+      const positions = [];
+      const uvs = [];
+      const indices = [];
+      const zStart = 0.03;
+      const zEnd = 0.72;
+
+      for (let i = 0; i <= lengthSegments; i++) {
+        const t = i / lengthSegments;
+        const z = zStart + (zEnd - zStart) * t;
+        const width = 0.115 * Math.pow(Math.sin(Math.PI * (0.25 + 0.7 * t)), 0.8);
+        const depth = 0.21 * Math.pow(Math.sin(Math.PI * (0.2 + 0.78 * t)), 0.9);
+
+        for (let j = 0; j <= radialSegments; j++) {
+          const theta = (j / radialSegments) * Math.PI;
+          positions.push(
+            Math.cos(theta) * width,
+            -0.005 - Math.sin(theta) * depth,
+            z
+          );
+          uvs.push(t, j / radialSegments);
+        }
+      }
+
+      for (let i = 1; i <= lengthSegments; i++) {
+        for (let j = 1; j <= radialSegments; j++) {
+          const a = (radialSegments + 1) * (i - 1) + (j - 1);
+          const b = (radialSegments + 1) * i + (j - 1);
+          const c = (radialSegments + 1) * i + j;
+          const d = (radialSegments + 1) * (i - 1) + j;
+          indices.push(a, b, d, b, c, d);
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setIndex(indices);
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function createPelican() {
+      const pelican = new THREE.Group();
+      const sphere = new THREE.SphereGeometry(1, 48, 32);
+
+      const feather = new THREE.MeshStandardMaterial({ color: 0xf6efe1, roughness: 0.9 });
+      const featherShade = new THREE.MeshStandardMaterial({ color: 0xe8dfcc, roughness: 0.92 });
+      const featherWarm = new THREE.MeshStandardMaterial({ color: 0xf3e6d0, roughness: 0.9 });
+      const darkFeather = new THREE.MeshStandardMaterial({ color: 0x4f5559, roughness: 0.86 });
+      const darkFeatherLight = new THREE.MeshStandardMaterial({ color: 0x6a7073, roughness: 0.86 });
+      const beak = new THREE.MeshStandardMaterial({ color: 0xe39c42, roughness: 0.5 });
+      const beakTip = new THREE.MeshStandardMaterial({ color: 0xc97e30, roughness: 0.52 });
+      const leg = new THREE.MeshStandardMaterial({ color: 0xd4853a, roughness: 0.7 });
+      const eye = new THREE.MeshStandardMaterial({ color: 0x161311, roughness: 0.22, metalness: 0.05 });
+      const glint = new THREE.MeshBasicMaterial({ color: 0xfff8e6 });
+
+      // 身体微微向前倾，尾巴稍微翘起。
+      const body = new THREE.Mesh(sphere, feather);
+      body.scale.set(0.47, 0.45, 0.62);
+      body.position.set(0, 0.95, -0.08);
+      body.rotation.x = -0.04;
+      pelican.add(body);
+
+      const chest = new THREE.Mesh(sphere, featherWarm);
+      chest.scale.set(0.37, 0.38, 0.44);
+      chest.position.set(0, 0.86, 0.13);
+      pelican.add(chest);
+
+      // 五片尾巴羽毛向后展开。
+      for (let i = -2; i <= 2; i++) {
+        const tailFeather = new THREE.Mesh(sphere, i % 2 === 0 ? featherShade : feather);
+        tailFeather.scale.set(0.058, 0.018, 0.25 - Math.abs(i) * 0.015);
+        tailFeather.position.set(i * 0.06, 0.86, -0.78);
+        tailFeather.rotation.x = -0.3;
+        tailFeather.rotation.y = i * 0.24;
+        pelican.add(tailFeather);
+      }
+
+      // 细长的 S 形脖子从身体前上方伸到头部。
+      const neckCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 1.14, 0.2),
+        new THREE.Vector3(0, 1.3, 0.5),
+        new THREE.Vector3(0, 1.47, 0.63),
+        new THREE.Vector3(0, 1.66, 0.57),
+        new THREE.Vector3(0, 1.82, 0.68)
+      ]);
+      const neck = new THREE.Mesh(
+        taperedTube(neckCurve, (t) => 0.15 - 0.07 * t),
+        feather
+      );
+      pelican.add(neck);
+
+      const head = new THREE.Group();
+      head.position.set(0, 1.9, 0.76);
+      head.rotation.x = 0.04;
+      pelican.add(head);
+      pelican.userData.head = head;
+
+      const skull = new THREE.Mesh(sphere, feather);
+      skull.scale.set(0.16, 0.175, 0.2);
+      head.add(skull);
+
+      // 又长又扁的喙，下面挂着标志性的喉囊。
+      const bill = new THREE.Group();
+      bill.position.set(0, -0.015, 0.1);
+      bill.rotation.x = 0.08;
+      head.add(bill);
+
+      const upperGeometry = new THREE.CylinderGeometry(0.018, 0.14, 0.8, 32, 1);
+      upperGeometry.rotateX(Math.PI / 2);
+      upperGeometry.translate(0, 0, 0.4);
+      upperGeometry.scale(1, 0.4, 1);
+      const upperBill = new THREE.Mesh(upperGeometry, beak);
+      bill.add(upperBill);
+
+      const hook = new THREE.Mesh(sphere, beakTip);
+      hook.scale.set(0.026, 0.04, 0.024);
+      hook.position.set(0, -0.015, 0.792);
+      bill.add(hook);
+
+      const throat = new THREE.Mesh(createPouchGeometry(), new THREE.MeshStandardMaterial({
+        color: 0xf0b862,
+        roughness: 0.56,
+        metalness: 0,
+        side: THREE.DoubleSide
+      }));
+      bill.add(throat);
+
+      for (const side of [-1, 1]) {
+        const eyeball = new THREE.Mesh(new THREE.SphereGeometry(0.028, 20, 16), eye);
+        eyeball.position.set(side * 0.145, 0.048, 0.1);
+        head.add(eyeball);
+
+        const specular = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 8), glint);
+        specular.position.set(side * 0.1595, 0.058, 0.1225);
+        head.add(specular);
+      }
+
+      // 后脑的几根短冠羽。
+      for (let i = 0; i < 3; i++) {
+        const crest = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.15, 6), featherShade);
+        crest.position.set((i - 1) * 0.03, 0.15, -0.11);
+        crest.rotation.x = -1.1;
+        crest.rotation.z = (i - 1) * 0.16;
+        head.add(crest);
+      }
+
+      // 收起的翅膀，后端露出一排深色初级飞羽。
+      for (const side of [-1, 1]) {
+        const wing = new THREE.Group();
+        wing.position.set(side * 0.38, 0.98, -0.12);
+        wing.rotation.z = -side * 0.06;
+        pelican.add(wing);
+
+        const upper = new THREE.Mesh(sphere, featherShade);
+        upper.scale.set(0.13, 0.27, 0.44);
+        upper.position.set(side * 0.06, 0.04, 0.04);
+        upper.rotation.x = -0.15;
+        wing.add(upper);
+
+        const covert = new THREE.Mesh(sphere, feather);
+        covert.scale.set(0.11, 0.19, 0.34);
+        covert.position.set(side * 0.1, -0.08, -0.06);
+        covert.rotation.x = 0.08;
+        wing.add(covert);
+
+        for (let i = 0; i < 5; i++) {
+          const primary = new THREE.Mesh(sphere, i === 0 ? darkFeatherLight : darkFeather);
+          primary.scale.set(0.028, 0.045, 0.28 + i * 0.012);
+          primary.position.set(side * (0.14 + i * 0.006), -0.13 - i * 0.034, -0.36 - i * 0.024);
+          primary.rotation.x = -0.22 - i * 0.04;
+          primary.rotation.y = side * 0.22;
+          wing.add(primary);
+        }
+      }
+
+      // 短腿和带蹼的三趾脚。
+      for (const side of [-1, 1]) {
+        const legMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.038, 0.43, 14), leg);
+        legMesh.position.set(side * 0.17, 0.28, 0.02);
+        legMesh.rotation.z = side * 0.04;
+        pelican.add(legMesh);
+
+        const thigh = new THREE.Mesh(sphere, feather);
+        thigh.scale.set(0.14, 0.15, 0.16);
+        thigh.position.set(side * 0.16, 0.52, 0);
+        pelican.add(thigh);
+
+        const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), leg);
+        ankle.position.set(side * 0.17, 0.065, 0.03);
+        pelican.add(ankle);
+
+        const foot = new THREE.Group();
+        foot.position.set(side * 0.18, 0.02, 0.05);
+        pelican.add(foot);
+
+        for (let toe = -1; toe <= 1; toe++) {
+          const toeGeometry = new THREE.CapsuleGeometry(0.026, 0.15, 4, 8);
+          toeGeometry.rotateX(Math.PI / 2);
+          toeGeometry.scale(1, 0.55, 1);
+          const toeMesh = new THREE.Mesh(toeGeometry, leg);
+          toeMesh.position.set(0, 0, 0.075);
+          toeMesh.rotation.y = toe * 0.32;
+          foot.add(toeMesh);
+        }
+
+        const heel = new THREE.Mesh(sphere, leg);
+        heel.scale.set(0.06, 0.018, 0.07);
+        heel.position.set(0, 0.005, 0);
+        foot.add(heel);
+      }
+
+      pelican.traverse((object) => {
+        if (object.isMesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+        }
+      });
+
+      return pelican;
+    }
+
+    function createContactTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      const gradient = ctx.createRadialGradient(128, 128, 8, 128, 128, 126);
+      gradient.addColorStop(0, 'rgba(42, 34, 24, 0.62)');
+      gradient.addColorStop(0.48, 'rgba(42, 34, 24, 0.3)');
+      gradient.addColorStop(0.78, 'rgba(42, 34, 24, 0.1)');
+      gradient.addColorStop(1, 'rgba(42, 34, 24, 0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 256, 256);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    function createMotes() {
+      const count = 72;
+      const positions = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        const seed = {
+          x: (Math.random() - 0.5) * 8,
+          y: 0.4 + Math.random() * 2.8,
+          z: (Math.random() - 0.5) * 7,
+          phase: Math.random() * Math.PI * 2,
+          drift: 0.5 + Math.random() * 0.8
+        };
+        motes.seeds.push(seed);
+        positions[i * 3] = seed.x;
+        positions[i * 3 + 1] = seed.y;
+        positions[i * 3 + 2] = seed.z;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d');
+      const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gradient.addColorStop(0, 'rgba(255, 250, 232, 1)');
+      gradient.addColorStop(0.35, 'rgba(255, 245, 218, 0.65)');
+      gradient.addColorStop(1, 'rgba(255, 245, 218, 0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 64, 64);
+      const sprite = new THREE.CanvasTexture(canvas);
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const material = new THREE.PointsMaterial({
+        color: 0xfff1d2,
+        map: sprite,
+        size: 0.034,
+        transparent: true,
+        opacity: 0.34,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+
+      return new THREE.Points(geometry, material);
+    }
+
+    function updateMotes(time) {
+      if (!motes.points) return;
+      const attribute = motes.points.geometry.attributes.position;
+      for (let i = 0; i < motes.seeds.length; i++) {
+        const seed = motes.seeds[i];
+        attribute.setX(i, seed.x + Math.sin(time * 0.22 * seed.drift + seed.phase) * 0.4);
+        attribute.setY(i, seed.y + Math.sin(time * 0.16 * seed.drift + seed.phase * 1.4) * 0.28);
+        attribute.setZ(i, seed.z + Math.cos(time * 0.19 * seed.drift + seed.phase) * 0.35);
+      }
+      attribute.needsUpdate = true;
+    }
+  </script>
+</body>
+</html>
